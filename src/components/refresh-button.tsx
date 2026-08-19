@@ -8,6 +8,30 @@ interface TriggerResult {
   status?: string;
   itemsNew?: number;
   errorsCount?: number;
+  message?: string;
+}
+
+/**
+ * Each source gets its own request (and its own 60s Vercel function
+ * budget), instead of one request looping every source — a single slow
+ * source (e.g. OCR on a scanned PDF) used to be able to blow the shared
+ * timeout and take every other source down with it, surfacing as a
+ * useless "verification failed" with no real reason.
+ */
+async function triggerSource(sourceKey: string): Promise<TriggerResult> {
+  try {
+    const res = await fetch("/api/ingestion/trigger", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ sourceKey }),
+    });
+    const text = await res.text();
+    const data = text ? JSON.parse(text) : {};
+    if (!res.ok) return { status: "FAILED", errorsCount: 1, message: data.error ?? `HTTP ${res.status}` };
+    return data.results?.[0] ?? { status: "FAILED", errorsCount: 1, message: "Resposta vazia." };
+  } catch (err) {
+    return { status: "FAILED", errorsCount: 1, message: err instanceof Error ? err.message : "Falha de rede." };
+  }
 }
 
 /**
@@ -25,23 +49,34 @@ export function RefreshButton() {
     setLoading(true);
     setSummary(null);
     try {
-      const res = await fetch("/api/ingestion/trigger", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" });
-      const data = await res.json();
-      const results: TriggerResult[] = data.results ?? [];
+      const sourcesRes = await fetch("/api/sources");
+      if (!sourcesRes.ok) throw new Error(`Não foi possível listar as fontes (HTTP ${sourcesRes.status}).`);
+      const sourcesData = await sourcesRes.json();
+      const keys: string[] = (sourcesData.sources ?? [])
+        .filter((s: { enabled: boolean; isDemo: boolean }) => s.enabled && !s.isDemo)
+        .map((s: { key: string }) => s.key);
+
+      if (keys.length === 0) {
+        setSummary("Nenhuma fonte activa para verificar.");
+        return;
+      }
+
+      const results = await Promise.all(keys.map(triggerSource));
       const totalNew = results.reduce((sum, r) => sum + (r.itemsNew ?? 0), 0);
-      const hadError = results.some((r) => (r.errorsCount ?? 0) > 0 || r.status === "FAILED");
+      const failed = results.filter((r) => r.status === "FAILED");
+
       setSummary(
-        results.length === 0
-          ? "Nenhuma fonte activa para verificar."
-          : hadError
-            ? "Verificação concluída, mas uma fonte teve um problema — ver Fontes."
-            : totalNew > 0
-              ? `${totalNew} novo(s) concurso(s) encontrado(s).`
-              : "Sem concursos novos."
+        failed.length > 0
+          ? totalNew > 0
+            ? `${totalNew} novo(s) concurso(s) encontrado(s). ${failed.length} fonte(s) falharam: ${failed.map((f) => f.message).join("; ")}`
+            : `Verificação falhou em ${failed.length} fonte(s): ${failed.map((f) => f.message).join("; ")}`
+          : totalNew > 0
+            ? `${totalNew} novo(s) concurso(s) encontrado(s).`
+            : "Sem concursos novos."
       );
       router.refresh();
-    } catch {
-      setSummary("A verificação falhou. Tenta novamente.");
+    } catch (err) {
+      setSummary(`A verificação falhou: ${err instanceof Error ? err.message : "erro desconhecido"}.`);
     } finally {
       setLoading(false);
     }

@@ -1,0 +1,107 @@
+@import "tailwindcss";
+
+/*
+ * Design tokens — placeholder palette inspired by Nemus's environmental-
+ * consultancy positioning (deep forest green + warm neutral sand), since
+ * this sandbox could not reach nemus.pt to pull real brand assets/colors
+ * (network egress blocked — see docs/ARCHITECTURE.md). Everything in the UI
+ * reads these CSS variables rather than hardcoded colors, so swapping in the
+ * real Nemus brand palette later is a change to this file only.
+ */
+:root {
+  --background: #f7f8f5;
+  --foreground: #1a2420;
+  --card: #ffffff;
+  --card-foreground: #1a2420;
+  --border: #dfe3dc;
+  --muted: #eef0ea;
+  --muted-foreground: #5b6660;
+
+  --primary: #1f4d3d;
+  --primary-foreground: #ffffff;
+  --primary-hover: #163a2e;
+
+  --accent: #b98b4e;
+  --accent-foreground: #2a1f0f;
+
+  --success: #2f7d4f;
+  --success-bg: #e6f2ea;
+  --warning: #b8860b;
+  --warning-bg: #fbf1dc;
+  --danger: #b3261e;
+  --danger-bg: #fbe9e7;
+  --critical: #8c1c13;
+  --critical-bg: #f6dcd9;
+
+  --ring: #1f4d3d;
+
+  --radius: 0.625rem;
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-border: var(--border);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-primary-hover: var(--primary-hover);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-success: var(--success);
+  --color-success-bg: var(--success-bg);
+  --color-warning: var(--warning);
+  --color-warning-bg: var(--warning-bg);
+  --color-danger: var(--danger);
+  --color-danger-bg: var(--danger-bg);
+  --color-critical: var(--critical);
+  --color-critical-bg: var(--critical-bg);
+  --color-ring: var(--ring);
+  --radius-md: var(--radius);
+  --font-sans:
+    ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  --font-mono: ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --background: #121613;
+    --foreground: #e8ece7;
+    --card: #191f1b;
+    --card-foreground: #e8ece7;
+    --border: #2b322c;
+    --muted: #1e241f;
+    --muted-foreground: #9aa69c;
+
+    --primary: #4c9573;
+    --primary-foreground: #0d150f;
+    --primary-hover: #5eab86;
+
+    --accent: #cda36a;
+    --accent-foreground: #221a0c;
+
+    --success: #4c9573;
+    --success-bg: #16261c;
+    --warning: #d6a53a;
+    --warning-bg: #2b2410;
+    --danger: #e2685e;
+    --danger-bg: #2c1613;
+    --critical: #f0897d;
+    --critical-bg: #2e130f;
+
+    --ring: #4c9573;
+  }
+}
+
+body {
+  background: var(--background);
+  color: var(--foreground);
+  font-family: var(--font-sans);
+}
+
+* {
+  border-color: var(--border);
+}

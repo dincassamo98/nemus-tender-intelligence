@@ -1,0 +1,61 @@
+name: Scheduled ingestion
+
+# Runs the full ingestion pipeline against a real Node + Playwright
+# environment — required for the Jornal Notícias adapter (browser
+# automation), which cannot run inside a Vercel serverless function
+# (see docs/ARCHITECTURE.md "Why ingestion is split across Vercel and
+# GitHub Actions"). Lightweight HTTP-only sources (UFSA) also run here on
+# the same schedule for simplicity, in addition to being triggerable
+# directly from the app's Refresh button.
+#
+# Twice daily by default — tune to match how often new editions/notices
+# actually appear; there is no benefit to polling more often than the
+# source publishes.
+on:
+  schedule:
+    - cron: "0 6 * * *" # 06:00 UTC (~08:00 Maputo, CAT/UTC+2)
+    - cron: "0 14 * * *" # 14:00 UTC (~16:00 Maputo)
+  workflow_dispatch:
+    inputs:
+      source:
+        description: "Run only this source key (leave empty to run all enabled non-demo sources)"
+        required: false
+        type: string
+
+jobs:
+  ingest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: "pnpm"
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Install Playwright browsers
+        run: pnpm exec playwright install --with-deps chromium
+
+      - name: Apply pending migrations
+        run: pnpm exec prisma migrate deploy
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          DIRECT_URL: ${{ secrets.DIRECT_URL }}
+
+      - name: Run ingestion
+        run: pnpm ingest ${{ inputs.source && format('--source {0}', inputs.source) || '' }}
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          DIRECT_URL: ${{ secrets.DIRECT_URL }}
+          NOTICIAS_EMAIL: ${{ secrets.NOTICIAS_EMAIL }}
+          NOTICIAS_PASSWORD: ${{ secrets.NOTICIAS_PASSWORD }}
+          STORAGE_DRIVER: ${{ vars.STORAGE_DRIVER || 'local' }}
+          STORAGE_LOCAL_DIR: ${{ vars.STORAGE_LOCAL_DIR || './storage' }}

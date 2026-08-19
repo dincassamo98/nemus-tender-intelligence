@@ -1,0 +1,441 @@
+// Nemus África Tender Intelligence Platform — canonical data model.
+// See docs/ARCHITECTURE.md for the reasoning behind each block.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+// ---------------------------------------------------------------------------
+// Users & access
+// ---------------------------------------------------------------------------
+
+enum UserRole {
+  ADMIN
+  REVIEWER
+}
+
+model User {
+  id           String   @id @default(cuid())
+  email        String   @unique
+  name         String
+  passwordHash String
+  role         UserRole @default(REVIEWER)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  assignedTenders Tender[]        @relation("AssignedTenders")
+  notes           Note[]
+  activities      Activity[]
+  emailDrafts     EmailDraft[]
+  feedback        HumanFeedback[]
+  notifications   Notification[]
+}
+
+// ---------------------------------------------------------------------------
+// Source registry & ingestion runs
+// ---------------------------------------------------------------------------
+
+enum SourceType {
+  NEWSPAPER_FLIPBOOK
+  GOVERNMENT_PORTAL
+  DEVELOPMENT_BANK
+  UN_AGENCY
+  NGO
+  MUNICIPALITY
+  AGGREGATOR
+  DEMO
+  OTHER
+}
+
+enum SourceRunTrigger {
+  MANUAL
+  SCHEDULED
+}
+
+enum SourceRunStatus {
+  QUEUED
+  RUNNING
+  SUCCEEDED
+  FAILED
+  PARTIAL
+}
+
+model Source {
+  id                  String     @id @default(cuid())
+  key                 String     @unique // adapter registry key, e.g. "jornal-noticias"
+  name                String
+  type                SourceType
+  baseUrl             String
+  authRequired        Boolean    @default(false)
+  adapterKey          String // which SourceAdapter implementation to use
+  schedule            String? // cron expression, informational (actual scheduling lives in GH Actions / node-cron)
+  enabled             Boolean    @default(true)
+  isDemo              Boolean    @default(false)
+  reliabilityScore    Int        @default(100) // 0-100, decays on repeated failures
+  lastSuccessfulRunAt DateTime?
+  lastAttemptedRunAt  DateTime?
+  lastErrorAt         DateTime?
+  lastErrorMessage    String?
+  config              Json       @default("{}") // adapter-specific config (lookback days, section keywords, etc.)
+  notes               String? // human notes: ToS/robots.txt findings, rate-limit policy, reliability caveats
+  createdAt           DateTime   @default(now())
+  updatedAt           DateTime   @updatedAt
+
+  runs     SourceRun[]
+  editions Edition[]
+  tenders  Tender[]
+}
+
+model SourceRun {
+  id              String           @id @default(cuid())
+  sourceId        String
+  source          Source           @relation(fields: [sourceId], references: [id], onDelete: Cascade)
+  status          SourceRunStatus  @default(QUEUED)
+  trigger         SourceRunTrigger @default(MANUAL)
+  startedAt       DateTime         @default(now())
+  finishedAt      DateTime?
+  editionsScanned Int              @default(0)
+  itemsDiscovered Int              @default(0)
+  itemsNew        Int              @default(0)
+  itemsUpdated    Int              @default(0)
+  itemsDuplicate  Int              @default(0)
+  itemsIrrelevant Int              @default(0)
+  errorsCount     Int              @default(0)
+  errorMessage    String?
+  log             Json             @default("[]") // ordered list of step log entries surfaced in the Refresh UI
+  triggeredById   String?
+
+  @@index([sourceId, startedAt])
+}
+
+// ---------------------------------------------------------------------------
+// Editions (for edition-based sources like newspaper flipbooks)
+// ---------------------------------------------------------------------------
+
+enum EditionStatus {
+  DISCOVERED
+  QUEUED
+  DOWNLOADING
+  DOWNLOADED
+  PROCESSING
+  PROCESSED
+  FAILED
+  REQUIRES_REVIEW
+}
+
+model Edition {
+  id                 String        @id @default(cuid())
+  sourceId           String
+  source             Source        @relation(fields: [sourceId], references: [id], onDelete: Cascade)
+  externalId         String // edition id/slug as exposed by the source
+  publicationDate    DateTime
+  url                String
+  status             EditionStatus @default(DISCOVERED)
+  pageCount          Int?
+  announcementsFound Int           @default(0)
+  checksum           String? // hash of raw edition content, used to detect re-publication/corrections
+  errorMessage       String?
+  retryCount         Int           @default(0)
+  discoveredAt       DateTime      @default(now())
+  processedAt        DateTime?
+
+  tenders Tender[]
+
+  @@unique([sourceId, externalId])
+  @@index([sourceId, publicationDate])
+}
+
+// ---------------------------------------------------------------------------
+// Organizations & categories
+// ---------------------------------------------------------------------------
+
+model Organization {
+  id             String   @id @default(cuid())
+  name           String
+  normalizedName String   @unique // lowercased/accent-stripped, used for dedupe & matching
+  sector         String?
+  notes          String?
+  createdAt      DateTime @default(now())
+
+  tenders Tender[]
+}
+
+model Category {
+  id   String @id @default(cuid())
+  name String @unique
+  slug String @unique
+}
+
+// ---------------------------------------------------------------------------
+// Tenders — the canonical opportunity record
+// ---------------------------------------------------------------------------
+
+enum TenderStatus {
+  NEW
+  REVIEWING
+  PURSUING
+  SUBMITTED
+  WON
+  LOST
+  REJECTED
+  EXPIRED
+}
+
+enum Classification {
+  CRITICAL // 🔥
+  HIGH // 🟢
+  MEDIUM // 🟡
+  LOW // ⚪
+  NOT_RELEVANT // 🔴
+}
+
+model Tender {
+  id String @id @default(cuid())
+
+  // Identity & provenance
+  sourceId        String
+  source          Source   @relation(fields: [sourceId], references: [id])
+  editionId       String?
+  edition         Edition? @relation(fields: [editionId], references: [id])
+  externalRef     String? // tender/reference number as published, if any
+  sourceUrl       String // canonical page/edition the tender was found on
+  announcementUrl String? // deep link to the specific announcement, if distinct from sourceUrl
+
+  organizationId  String?
+  organization    Organization? @relation(fields: [organizationId], references: [id])
+  organizationRaw String // organization name as extracted, before normalization/linking
+
+  // Opportunity
+  title             String
+  description       String
+  categoryTags      String[] // sector/category keywords, e.g. ["environmental", "consulting"]
+  geography         String?
+  estimatedValue    Decimal? @db.Decimal(18, 2)
+  currency          String?
+  contractDuration  String?
+  procurementMethod String?
+  tenderType        String?
+
+  // Dates
+  publicationDate       DateTime?
+  sourcePublicationDate DateTime? // date the source (e.g. the newspaper edition) itself carries
+  discoveredAt          DateTime  @default(now())
+  deadline              DateTime?
+  clarificationDeadline DateTime?
+  submissionDeadline    DateTime?
+  openingDate           DateTime?
+
+  // Requirements
+  eligibilityRequirements String[]
+  requiredQualifications  String[]
+  requiredExperience      String[]
+  requiredDocuments       String[]
+  financialRequirements   String?
+  technicalRequirements   String?
+  consortiumNotes         String?
+
+  // Intelligence (AI-generated — always rendered with an "AI-generated" disclosure in the UI)
+  relevanceScore        Int            @default(0) // 0-100
+  confidenceScore       Int            @default(0) // 0-100, how confident the extraction/classification is
+  classification        Classification @default(LOW)
+  matchingCapabilities  String[]
+  classificationReasons String[] // human-readable "why this matters" bullets
+  risks                 String[]
+  missingInformation    String[]
+  aiSummary             String? // generated executive summary
+  recommendedAction     String? // PURSUE / REVIEW / LOW_PRIORITY + short reasoning
+
+  // Workflow
+  status       TenderStatus @default(NEW)
+  assignedToId String?
+  assignedTo   User?        @relation("AssignedTenders", fields: [assignedToId], references: [id])
+  watchlisted  Boolean      @default(false)
+  reviewed     Boolean      @default(false)
+  reviewedAt   DateTime?
+
+  // Dedup & change tracking
+  dedupeKey     String // coarse key for candidate lookup (org+normalized title, etc.)
+  contentHash   String // hash of the fields that matter for change detection
+  duplicateOfId String?
+  duplicateOf   Tender?  @relation("Duplicates", fields: [duplicateOfId], references: [id])
+  duplicates    Tender[] @relation("Duplicates")
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  documents   TenderDocument[]
+  versions    TenderVersion[]
+  changes     TenderChange[]
+  notes       Note[]
+  activities  Activity[]
+  emailDrafts EmailDraft[]
+  provenance  TenderFieldProvenance[]
+  feedback    HumanFeedback[]
+
+  @@index([status])
+  @@index([classification])
+  @@index([relevanceScore])
+  @@index([deadline])
+  @@index([watchlisted])
+  @@index([dedupeKey])
+  @@index([sourceId])
+}
+
+// Field-level provenance: every extracted fact should be traceable to Confirmed
+// (from the source), Inferred (derived by our pipeline) or AI-generated (LLM/classifier).
+enum ProvenanceConfidence {
+  CONFIRMED
+  INFERRED
+  AI_GENERATED
+}
+
+model TenderFieldProvenance {
+  id                String               @id @default(cuid())
+  tenderId          String
+  tender            Tender               @relation(fields: [tenderId], references: [id], onDelete: Cascade)
+  fieldName         String
+  value             String
+  confidence        ProvenanceConfidence
+  sourceDescription String // e.g. "Jornal Notícias — Edição 19 Ago 2026 — Página 14"
+  sourceDocumentId  String?
+  capturedAt        DateTime             @default(now())
+
+  @@index([tenderId, fieldName])
+}
+
+model TenderDocument {
+  id            String    @id @default(cuid())
+  tenderId      String
+  tender        Tender    @relation(fields: [tenderId], references: [id], onDelete: Cascade)
+  originalUrl   String
+  storagePath   String? // where the raw file is persisted (local disk path or object storage key)
+  fileType      String? // pdf / image / html / other
+  fileSizeBytes Int?
+  documentHash  String? // sha256 of raw bytes, used for dedupe/versioning
+  downloadedAt  DateTime?
+  extractedText String?
+  ocrApplied    Boolean   @default(false)
+  ocrStatus     String    @default("NOT_NEEDED") // NOT_NEEDED | PENDING | DONE | FAILED
+  parsingStatus String    @default("PENDING") // PENDING | DONE | FAILED
+  errorMessage  String?
+  createdAt     DateTime  @default(now())
+
+  @@index([tenderId])
+}
+
+model TenderVersion {
+  id            String   @id @default(cuid())
+  tenderId      String
+  tender        Tender   @relation(fields: [tenderId], references: [id], onDelete: Cascade)
+  versionNumber Int
+  snapshot      Json // full field snapshot at capture time
+  sourceRunId   String?
+  capturedAt    DateTime @default(now())
+
+  @@unique([tenderId, versionNumber])
+}
+
+model TenderChange {
+  id          String   @id @default(cuid())
+  tenderId    String
+  tender      Tender   @relation(fields: [tenderId], references: [id], onDelete: Cascade)
+  changeType  String // DEADLINE_CHANGED | REQUIREMENT_ADDED | REQUIREMENT_REMOVED | DOCUMENT_ADDED | STATUS_CHANGED | OTHER
+  fieldName   String?
+  oldValue    String?
+  newValue    String?
+  description String // human-readable, e.g. "Deadline changed from 10 Sep to 17 Sep"
+  detectedAt  DateTime @default(now())
+
+  @@index([tenderId, detectedAt])
+}
+
+// ---------------------------------------------------------------------------
+// Workflow support: notes, activity log, email drafts, human feedback
+// ---------------------------------------------------------------------------
+
+model Note {
+  id        String   @id @default(cuid())
+  tenderId  String
+  tender    Tender   @relation(fields: [tenderId], references: [id], onDelete: Cascade)
+  userId    String
+  user      User     @relation(fields: [userId], references: [id])
+  body      String
+  createdAt DateTime @default(now())
+
+  @@index([tenderId])
+}
+
+model Activity {
+  id          String   @id @default(cuid())
+  tenderId    String
+  tender      Tender   @relation(fields: [tenderId], references: [id], onDelete: Cascade)
+  userId      String?
+  user        User?    @relation(fields: [userId], references: [id])
+  type        String // STATUS_CHANGE | NOTE_ADDED | WATCHLISTED | ASSIGNED | SCORE_OVERRIDE | EMAIL_DRAFTED | CHANGE_DETECTED | SYSTEM
+  description String
+  metadata    Json     @default("{}")
+  createdAt   DateTime @default(now())
+
+  @@index([tenderId, createdAt])
+}
+
+enum EmailPurpose {
+  CLARIFICATION
+  REQUEST_DOCUMENTS
+  EXPRESS_INTEREST
+  ELIGIBILITY
+  OTHER
+}
+
+model EmailDraft {
+  id             String       @id @default(cuid())
+  tenderId       String
+  tender         Tender       @relation(fields: [tenderId], references: [id], onDelete: Cascade)
+  purpose        EmailPurpose
+  subject        String
+  body           String
+  groundedFields Json // which tender fields were used to generate this draft (traceability)
+  createdById    String
+  createdBy      User         @relation(fields: [createdById], references: [id])
+  createdAt      DateTime     @default(now())
+  sentAt         DateTime?
+
+  @@index([tenderId])
+}
+
+// Human-in-the-loop corrections feed future classifier improvements (rule tuning now, ML/embeddings later).
+model HumanFeedback {
+  id             String   @id @default(cuid())
+  tenderId       String
+  tender         Tender   @relation(fields: [tenderId], references: [id], onDelete: Cascade)
+  userId         String
+  user           User     @relation(fields: [userId], references: [id])
+  feedbackType   String // RELEVANT | NOT_RELEVANT | MAYBE | PURSUE | IGNORE | SCORE_CORRECTION
+  previousScore  Int?
+  correctedScore Int?
+  comment        String?
+  createdAt      DateTime @default(now())
+
+  @@index([tenderId])
+}
+
+// P2 stub — schema is ready so notification delivery can be added without a migration surprise.
+model Notification {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id])
+  type      String // NEW_RELEVANT_TENDER | DEADLINE_WARNING | CHANGE_ALERT | NEW_DOCUMENT | DAILY_DIGEST
+  title     String
+  body      String
+  tenderId  String?
+  read      Boolean  @default(false)
+  createdAt DateTime @default(now())
+
+  @@index([userId, read])
+}

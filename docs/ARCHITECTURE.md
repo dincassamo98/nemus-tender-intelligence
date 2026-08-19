@@ -50,11 +50,25 @@ pollution-control programmes, and donor-funded forest-carbon/REDD+ work. This
 directly informs `src/lib/intelligence/nemus-profile.ts`, the structured
 input to the relevance classifier — see below.
 
+**Sources added after user feedback identified real, currently-used
+sources**: Diário Económico (`diarioeconomico.co.mz/category/concursos-publicos/`
+— a WordPress site; the adapter tries the WP REST API first, falls back to
+HTML), MozConnections (`concursos.mozconnections.co.mz`), and UNDP
+Procurement Notices (`procurement-notices.undp.org`, filtered to
+Mozambique-tagged notices) — the first of the UN-agency family, chosen over
+the other ~10 UN agencies researched via the evaluation matrix in
+`registry.ts`. The UFSA adapter's URL was also corrected to the current
+"DotCom" platform (`ufsa.dotcom.co.mz/concursos?status=OPEN`) after the
+originally-researched `ufsa.gov.mz` proved to be a superseded version. All
+three, like Jornal Notícias and UFSA, are `NEEDS_VALIDATION` and disabled by
+default pending a live run.
+
 **Other procurement sources researched** (World Bank Projects & Operations,
-AfDB, UNGM, GoConcurso, ministry/municipality sites): evaluated but not built
-— see the documented rationale in `src/lib/adapters/registry.ts`
-(`RESEARCHED_UNIMPLEMENTED_SOURCES`). World Bank is the recommended next
-build: non-authenticated, structured, and squarely in Nemus's target sector.
+AfDB, UNGM, FAO, UNOPS, GoConcurso, concursos.co.mz, ministry/municipality
+sites): evaluated but not built — see the documented rationale in
+`src/lib/adapters/registry.ts` (`RESEARCHED_UNIMPLEMENTED_SOURCES` and the
+UN agency evaluation matrix). World Bank remains the recommended next build:
+non-authenticated, structured, and squarely in Nemus's target sector.
 
 ## Why ingestion is split across Vercel and GitHub Actions
 
@@ -165,9 +179,29 @@ See `prisma/schema.prisma`. Highlights beyond the obvious `Tender` record:
   never presents an AI-generated fact as if it were directly sourced.
 - `TenderVersion` / `TenderChange` — full-snapshot version history plus a
   diffed, human-readable change log (deadline moved, requirement added...).
-- `HumanFeedback` — the classifier's future training signal.
+- `HumanFeedback` — the classifier's future training signal, surfaced
+  (never auto-applied) in the Settings "learning from feedback" panel.
 - `SourceRun` — per-run counters and an ordered log array, which is exactly
   what the Refresh UI renders.
+- `TenderSourceSighting` — cross-source intelligence: when a second source
+  reports what the dedupe engine determines is the same real-world
+  opportunity, it's linked here rather than creating a second `Tender` row,
+  so the UI can show "1 opportunity — discovered across N sources" with
+  each source as independent corroborating evidence, instead of N
+  disconnected listings.
+
+## Canonical procurement taxonomy
+
+Different sources never agree on terminology (a UN agency's "Request for
+Proposal" vs. a ministry's "Pedido de Manifestação de Interesse" vs. a
+newspaper's "Anúncio de Concurso"). `lib/intelligence/taxonomy.ts` maps all
+of these onto one canonical set of opportunity types, so relevance never
+hinges on a source happening to use the word "concurso". The same module
+also does OCR-tolerant fuzzy matching of Jornal Notícias' two priority
+section headers ("Pedido de Manifestação de Interesse", "Anúncio de
+Concurso") — the newspaper adapter treats content found there as
+higher-trust than a generic keyword hit, per the two-layer strategy
+(section detection + keyword fallback) described in that adapter's file.
 
 ## Rendering model
 

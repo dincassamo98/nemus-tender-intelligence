@@ -5,77 +5,55 @@ import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
 
 interface TriggerResult {
-  sourceKey: string;
-  mode: "inline" | "dispatched";
   status?: string;
-  message?: string;
-  dispatched?: boolean;
-  itemsDiscovered?: number;
   itemsNew?: number;
-  itemsUpdated?: number;
-  itemsDuplicate?: number;
   errorsCount?: number;
 }
 
 /**
- * The Refresh button (spec section 27): triggers ingestion and shows exactly
- * what happened — sources checked, new/updated/duplicate/irrelevant counts,
- * and errors — never leaving the user wondering if it's actually working.
+ * Refresh: "a procurar novos concursos…" then a one-line result. The
+ * detailed per-source ingestion log is a debugging tool, not something
+ * Iris needs every time she clicks this — that detail lives on the
+ * Fontes page for whoever needs it.
  */
 export function RefreshButton() {
   const router = useRouter();
   const [loading, setLoading] = useState(false);
-  const [results, setResults] = useState<TriggerResult[] | null>(null);
-  const [open, setOpen] = useState(false);
+  const [summary, setSummary] = useState<string | null>(null);
 
   async function handleRefresh() {
     setLoading(true);
-    setOpen(true);
+    setSummary(null);
     try {
       const res = await fetch("/api/ingestion/trigger", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" });
       const data = await res.json();
-      setResults(data.results ?? []);
+      const results: TriggerResult[] = data.results ?? [];
+      const totalNew = results.reduce((sum, r) => sum + (r.itemsNew ?? 0), 0);
+      const hadError = results.some((r) => (r.errorsCount ?? 0) > 0 || r.status === "FAILED");
+      setSummary(
+        results.length === 0
+          ? "Nenhuma fonte activa para verificar."
+          : hadError
+            ? "Verificação concluída, mas uma fonte teve um problema — ver Fontes."
+            : totalNew > 0
+              ? `${totalNew} novo(s) concurso(s) encontrado(s).`
+              : "Sem concursos novos."
+      );
       router.refresh();
     } catch {
-      setResults([{ sourceKey: "unknown", mode: "inline", status: "FAILED", message: "Request failed." }]);
+      setSummary("A verificação falhou. Tenta novamente.");
     } finally {
       setLoading(false);
     }
   }
 
   return (
-    <div className="relative">
+    <div className="flex items-center gap-2">
       <Button variant="secondary" size="sm" onClick={handleRefresh} disabled={loading}>
-        <span aria-hidden>🔄</span>
-        {loading ? "Checking sources…" : "Refresh"}
+        <span aria-hidden>↻</span>
+        {loading ? "A procurar novos concursos…" : "Atualizar"}
       </Button>
-
-      {open && results ? (
-        <div className="absolute right-0 z-20 mt-2 w-96 rounded-lg border border-border bg-card p-4 text-sm shadow-lg">
-          <div className="mb-2 flex items-center justify-between">
-            <p className="font-semibold text-foreground">Refresh results</p>
-            <button onClick={() => setOpen(false)} className="text-muted-foreground hover:text-foreground" aria-label="Close">
-              ✕
-            </button>
-          </div>
-          <ul className="space-y-2">
-            {results.map((r, i) => (
-              <li key={i} className="rounded-md bg-muted p-2">
-                <p className="font-medium text-foreground">{r.sourceKey}</p>
-                {r.mode === "dispatched" ? (
-                  <p className="text-muted-foreground">{r.message}</p>
-                ) : (
-                  <p className="text-muted-foreground">
-                    {r.status} — {r.itemsDiscovered ?? 0} scanned, {r.itemsNew ?? 0} new, {r.itemsUpdated ?? 0} updated,{" "}
-                    {r.itemsDuplicate ?? 0} duplicate/ignored{r.errorsCount ? `, ${r.errorsCount} error(s)` : ""}
-                  </p>
-                )}
-              </li>
-            ))}
-            {results.length === 0 ? <li className="text-muted-foreground">No enabled sources to run.</li> : null}
-          </ul>
-        </div>
-      ) : null}
+      {summary ? <span className="text-xs text-muted-foreground">{summary}</span> : null}
     </div>
   );
 }

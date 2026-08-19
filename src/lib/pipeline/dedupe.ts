@@ -6,6 +6,7 @@ import { diceCoefficient, normalizeForMatching } from "./similarity";
  */
 export interface ExistingTenderLite {
   id: string;
+  sourceId: string;
   externalRef: string | null;
   organizationRaw: string;
   title: string;

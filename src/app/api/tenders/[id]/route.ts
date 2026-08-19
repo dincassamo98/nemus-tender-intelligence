@@ -26,6 +26,7 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
       provenance: true,
       feedback: true,
       duplicates: { select: { id: true, title: true, sourceUrl: true } },
+      sightings: { include: { source: { select: { name: true } } }, orderBy: { firstSeenAt: "asc" } },
     },
   });
 

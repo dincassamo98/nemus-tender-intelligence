@@ -5,11 +5,10 @@ import { usePathname } from "next/navigation";
 import { cn } from "@/lib/utils";
 
 const NAV_ITEMS = [
-  { href: "/", label: "Dashboard", icon: "🏠" },
-  { href: "/tenders", label: "Tender Feed", icon: "📋" },
-  { href: "/watchlist", label: "Watchlist", icon: "👀" },
-  { href: "/sources", label: "Sources", icon: "📡" },
-  { href: "/settings", label: "Settings", icon: "⚙️" },
+  { href: "/", label: "Concursos", icon: "📋" },
+  { href: "/watchlist", label: "Watchlist", icon: "★" },
+  { href: "/sources", label: "Fontes", icon: "📡" },
+  { href: "/settings", label: "Definições", icon: "⚙️" },
 ];
 
 export function Sidebar() {

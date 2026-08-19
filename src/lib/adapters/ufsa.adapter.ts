@@ -4,31 +4,43 @@ import { extractDates, extractDeadline, extractReferenceNumber, guessOrganizatio
 import { looksLikeAnnouncement } from "../intelligence/discovery-keywords";
 
 /**
- * UFSA (Unidade Funcional de Supervisão das Aquisições) publishes Mozambique's
- * open public procurement notices as plain server-rendered pages at
- * ufsa.gov.mz — a conventional government table listing, not an authenticated
- * flipbook. This is a good target for a lightweight HTTP + HTML-parsing
- * adapter (no browser automation needed), which is also why it runs fine
- * inside a Vercel serverless function when triggered by the Refresh button,
- * unlike the Playwright-based Jornal Notícias adapter.
+ * UFSA (Unidade Funcional de Supervisão das Aquisições) — Mozambique's
+ * public procurement supervision unit. The current portal
+ * (ufsa.dotcom.co.mz, a "DotCom" platform product — the older ufsa.gov.mz
+ * classic pages appear to be a previous/parallel version) exposes an
+ * open-tenders view filtered server-side via a query string:
  *
- * VALIDATION STATUS: this sandbox environment has no network egress to
- * ufsa.gov.mz (confirmed blocked), so the exact table markup could not be
- * inspected directly during development. The parser below is deliberately
- * generic — it doesn't assume specific CSS classes, only that open tenders
- * are rendered as an HTML <table> with one row per tender and that each row
- * contains a title/description cell, a reference-like token, and a date.
- * Run `pnpm ingest --source ufsa` against the real site and inspect the
- * SourceRun log before relying on this in production; if the table markup
- * doesn't match, the adapter fails loudly (a `type: "error"` event) rather
- * than silently returning zero results indistinguishable from "no tenders
- * today" — see the source health page.
+ *   https://ufsa.dotcom.co.mz/concursos?status=OPEN
+ *
+ * This is a plain unauthenticated URL, a good fit for a lightweight
+ * HTTP + HTML-parsing adapter (runs inline on Vercel, unlike Jornal
+ * Notícias). It also means once "closed" listings prove useful for
+ * organization-pattern intelligence (spec: recurring buyers), the same
+ * adapter can be pointed at ?status=CLOSED with a second Source config.
+ *
+ * VALIDATION STATUS: this sandbox has no network egress to ufsa.dotcom.co.mz
+ * (confirmed blocked), so the real markup is still unverified. Two real
+ * possibilities exist for a modern "DotCom"-branded platform, and this
+ * adapter is written to diagnose which one it actually is rather than
+ * silently guessing:
+ *   (a) server-rendered HTML with a table/list of tenders — the generic
+ *       parser below handles this.
+ *   (b) a client-side-rendered single-page app where the initial HTML is
+ *       an near-empty shell and the real data loads via a JS API call this
+ *       adapter can't see — detected via isLikelySpaShell() below, which
+ *       raises a clear, actionable error instead of quietly returning zero
+ *       results indistinguishable from "no open tenders today". If that
+ *       fires on a real run, this adapter needs to be rebuilt on Playwright
+ *       like the Jornal Notícias adapter, and the actual JSON API it calls
+ *       (visible in the browser's network tab) should be used directly
+ *       instead of scraping rendered HTML at all — Prefer structured
+ *       data/API over brittle browser scraping wherever the source exposes
+ *       one (spec section 4).
  */
 
-const UFSA_OPEN_TENDERS_URL = "https://www.ufsa.gov.mz/concursos.php";
+const UFSA_OPEN_TENDERS_URL = "https://ufsa.dotcom.co.mz/concursos?status=OPEN";
 const REQUEST_TIMEOUT_MS = 20_000;
-const USER_AGENT =
-  "NemusTenderIntelligence/1.0 (+internal tool for Nemus Africa; contact: iris@nemus.africa)";
+const USER_AGENT = "NemusTenderIntelligence/1.0 (+internal tool for Nemus Africa; contact: iris@nemus.africa)";
 
 async function fetchHtml(url: string): Promise<string> {
   const controller = new AbortController();
@@ -38,13 +50,18 @@ async function fetchHtml(url: string): Promise<string> {
       headers: { "User-Agent": USER_AGENT, Accept: "text/html" },
       signal: controller.signal,
     });
-    if (!res.ok) {
-      throw new Error(`UFSA responded with HTTP ${res.status} for ${url}`);
-    }
+    if (!res.ok) throw new Error(`UFSA responded with HTTP ${res.status} for ${url}`);
     return await res.text();
   } finally {
     clearTimeout(timeout);
   }
+}
+
+/** Heuristic: a JS-rendered SPA shell has almost no text content and a tiny handful of root-level elements. */
+function isLikelySpaShell($: cheerio.CheerioAPI): boolean {
+  const bodyText = $("body").text().replace(/\s+/g, " ").trim();
+  const scriptCount = $("script[src]").length;
+  return bodyText.length < 200 && scriptCount > 0;
 }
 
 interface ParsedRow {
@@ -53,13 +70,15 @@ interface ParsedRow {
   linkHref?: string;
 }
 
-function parseTenderTable(html: string): ParsedRow[] {
+function parseTenderRows(html: string): { rows: ParsedRow[]; spaShellSuspected: boolean } {
   const $ = cheerio.load(html);
   const rows: ParsedRow[] = [];
 
-  // Generic strategy: every <table> on the page, every <tr> with 2+ <td>.
-  // Government CMS table markup here is unverified (see module docstring),
-  // so we don't key off a specific selector.
+  if (isLikelySpaShell($)) {
+    return { rows: [], spaShellSuspected: true };
+  }
+
+  // Strategy A: conventional <table> rows.
   $("table tr").each((_, tr) => {
     const cells: string[] = [];
     $(tr)
@@ -68,32 +87,51 @@ function parseTenderTable(html: string): ParsedRow[] {
         cells.push($(td).text().replace(/\s+/g, " ").trim());
       });
     if (cells.length < 2) return;
-
     const text = cells.join(" | ");
     if (!looksLikeAnnouncement(text) && !/\d{1,2}[/\-.]\d{1,2}[/\-.]\d{4}/.test(text)) return;
-
-    const linkHref = $(tr).find("a[href]").first().attr("href");
-    rows.push({ text, cells, linkHref });
+    rows.push({ text, cells, linkHref: $(tr).find("a[href]").first().attr("href") });
   });
 
-  return rows;
+  if (rows.length > 0) return { rows, spaShellSuspected: false };
+
+  // Strategy B: modern portals often render each tender as a card/list item
+  // rather than a table row. Look for repeated sibling blocks whose class
+  // hints at that (tender/concurso/card/item/list), generic on purpose
+  // since the exact class names are unverified.
+  const candidateSelectors = [
+    "[class*='concurso' i]",
+    "[class*='tender' i]",
+    "[class*='card' i]",
+    "[class*='list-item' i]",
+    "li",
+  ];
+  for (const selector of candidateSelectors) {
+    const found: ParsedRow[] = [];
+    $(selector).each((_, el) => {
+      const text = $(el).text().replace(/\s+/g, " ").trim();
+      if (text.length < 20 || text.length > 2000) return;
+      if (!looksLikeAnnouncement(text) && !/\d{1,2}[/\-.]\d{1,2}[/\-.]\d{4}/.test(text)) return;
+      found.push({ text, cells: [text], linkHref: $(el).find("a[href]").first().attr("href") });
+    });
+    if (found.length >= 2) {
+      rows.push(...found);
+      break;
+    }
+  }
+
+  return { rows, spaShellSuspected: false };
 }
 
 function rowToAnnouncement(row: ParsedRow, baseUrl: string): RawAnnouncement | null {
   const text = row.cells.join("\n");
   if (text.trim().length < 15) return null;
 
-  // Heuristic: the longest cell is usually the title/description; a cell
-  // matching a reference-number pattern is the tender reference.
   const titleCell = [...row.cells].sort((a, b) => b.length - a.length)[0];
   const reference = extractReferenceNumber(text);
   const dates = extractDates(text);
   const deadline = extractDeadline(text) ?? dates[dates.length - 1];
   const organization = guessOrganization(text);
-
-  const announcementUrl = row.linkHref
-    ? new URL(row.linkHref, baseUrl).toString()
-    : undefined;
+  const announcementUrl = row.linkHref ? new URL(row.linkHref, baseUrl).toString() : undefined;
 
   return {
     externalRef: reference,
@@ -105,14 +143,14 @@ function rowToAnnouncement(row: ParsedRow, baseUrl: string): RawAnnouncement | n
     deadline,
     submissionDeadline: deadline,
     procurementMethod: /limitado/i.test(text) ? "Concurso Limitado" : "Concurso Público",
-    sourceDescription: `UFSA — Portal de Concursos Públicos (${baseUrl})`,
+    sourceDescription: `UFSA — Portal de Concursos Públicos, filtro "Abertos" (${baseUrl})`,
     inferredFields: organization ? undefined : ["organizationRaw"],
   };
 }
 
 export const ufsaAdapter: SourceAdapter = {
   key: "ufsa",
-  name: "UFSA — Portal de Concursos Públicos",
+  name: "UFSA — Portal de Concursos Públicos (abertos)",
   requiresAuth: false,
   validationStatus: "NEEDS_VALIDATION",
   async *run(_ctx: AdapterRunContext): AsyncGenerator<AdapterEvent> {
@@ -130,15 +168,26 @@ export const ufsaAdapter: SourceAdapter = {
       return;
     }
 
-    const rows = parseTenderTable(html);
-    yield { type: "log", message: `Parsed ${rows.length} candidate row(s) from the open-tenders table.` };
+    const { rows, spaShellSuspected } = parseTenderRows(html);
+
+    if (spaShellSuspected) {
+      yield {
+        type: "error",
+        fatal: true,
+        message:
+          "The response looks like an empty JavaScript-app shell, not rendered content — this page likely loads tenders via a JS API call this HTTP-only adapter can't see. Needs to be rebuilt on Playwright (like the Jornal Notícias adapter) or, better, pointed directly at whatever JSON API the browser calls (inspect the Network tab on the real site). See the adapter's module docstring.",
+      };
+      return;
+    }
+
+    yield { type: "log", message: `Parsed ${rows.length} candidate row(s) from the open-tenders view.` };
 
     if (rows.length === 0) {
       yield {
         type: "error",
         fatal: false,
         message:
-          "No tender rows matched the expected table structure. This likely means UFSA changed its page markup rather than that zero tenders are open — verify manually at " +
+          "No tender rows matched any expected structure (table or card list). This likely means UFSA changed its page markup rather than that zero tenders are open — verify manually at " +
           UFSA_OPEN_TENDERS_URL,
       };
       return;

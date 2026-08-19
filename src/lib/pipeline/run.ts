@@ -49,6 +49,7 @@ async function loadDedupePool(): Promise<ExistingTenderLite[]> {
     orderBy: { createdAt: "desc" },
     select: {
       id: true,
+      sourceId: true,
       externalRef: true,
       organizationRaw: true,
       title: true,
@@ -61,6 +62,7 @@ async function loadDedupePool(): Promise<ExistingTenderLite[]> {
 
   return rows.map((t) => ({
     id: t.id,
+    sourceId: t.sourceId,
     externalRef: t.externalRef,
     organizationRaw: t.organizationRaw,
     title: t.title,
@@ -69,6 +71,43 @@ async function loadDedupePool(): Promise<ExistingTenderLite[]> {
     deadline: t.deadline,
     documentHashes: t.documents.map((d) => d.documentHash).filter((h): h is string => !!h),
   }));
+}
+
+/**
+ * Records that `sourceId` also carries this same real-world opportunity,
+ * when it's not the tender's original/primary source (spec section 12:
+ * cross-source intelligence — "1 opportunity, discovered across N
+ * sources" rather than N separate tenders). Idempotent via the unique
+ * (tenderId, sourceId) constraint.
+ */
+async function recordSourceSighting(
+  tenderId: string,
+  primarySourceId: string,
+  sightingSourceId: string,
+  sourceUrl: string,
+  announcementUrl: string | null
+) {
+  if (sightingSourceId === primarySourceId) return;
+
+  const existing = await prisma.tenderSourceSighting.findUnique({
+    where: { tenderId_sourceId: { tenderId, sourceId: sightingSourceId } },
+  });
+  if (existing) return;
+
+  const [sightingSource] = await Promise.all([
+    prisma.source.findUniqueOrThrow({ where: { id: sightingSourceId }, select: { name: true } }),
+    prisma.tenderSourceSighting.create({
+      data: { tenderId, sourceId: sightingSourceId, sourceUrl, announcementUrl },
+    }),
+  ]);
+
+  await prisma.activity.create({
+    data: {
+      tenderId,
+      type: "SYSTEM",
+      description: `Also discovered via ${sightingSource.name} — same opportunity, corroborated across sources.`,
+    },
+  });
 }
 
 async function persistDocuments(tenderId: string, announcement: RawAnnouncement) {
@@ -388,6 +427,7 @@ export async function runSourceIngestion(
               counters.itemsNew++;
               dedupePool.push({
                 id: "pending",
+                sourceId: source.id,
                 externalRef: a.externalRef ?? null,
                 organizationRaw: a.organizationRaw,
                 title: a.title,
@@ -398,8 +438,10 @@ export async function runSourceIngestion(
               });
             } else if (dedupe.hasDifferences) {
               await processUpdatedAnnouncement(dedupe.match.id, a);
+              await recordSourceSighting(dedupe.match.id, dedupe.match.sourceId, source.id, a.sourceUrl, a.announcementUrl ?? null);
               counters.itemsUpdated++;
             } else {
+              await recordSourceSighting(dedupe.match.id, dedupe.match.sourceId, source.id, a.sourceUrl, a.announcementUrl ?? null);
               counters.itemsDuplicate++;
             }
           } catch (err) {

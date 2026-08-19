@@ -24,21 +24,24 @@ pnpm install
 docker compose up -d db
 
 cp .env.example .env
-# Edit .env: set ADMIN_PASSWORD at minimum. Leave NOTICIAS_EMAIL/PASSWORD
-# blank for now — the app works fully on demo data without them.
+# Edit .env: set ADMIN_PASSWORD at minimum, and NOTICIAS_EMAIL/PASSWORD
+# if you want the Jornal Notícias source to run.
 
 pnpm db:migrate
-pnpm db:seed   # creates the admin user, registers sources, loads demo tenders
+pnpm db:seed   # creates the admin user, registers the 5 real sources (enabled)
 
 pnpm dev       # http://localhost:3000
 ```
 
-Log in with the `ADMIN_EMAIL` / `ADMIN_PASSWORD` you set in `.env`.
+Log in with the `ADMIN_EMAIL` / `ADMIN_PASSWORD` you set in `.env`. There is
+no demo data — a freshly seeded database is genuinely empty until ingestion
+actually runs against a real source; that's an intentional, honest state,
+not a bug.
 
 ## Running ingestion manually
 
 ```bash
-pnpm ingest                    # all enabled, non-demo sources
+pnpm ingest                    # all enabled sources
 pnpm ingest --source ufsa       # a single source by key
 ```
 
@@ -59,7 +62,8 @@ silent bug would mean a missed or miscategorized tender.
 ## Project layout
 
 ```
-src/lib/adapters/       Source adapters (Jornal Notícias, UFSA, demo) + registry
+src/lib/adapters/       Source adapters (Jornal Notícias, UFSA, Diário Económico,
+                         MozConnections, UNDP) + registry
 src/lib/pipeline/       Ingestion pipeline: dedupe, change detection, document
                          processing, extraction helpers, orchestrator
 src/lib/intelligence/   Nemus África profile, relevance classifier, executive

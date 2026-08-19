@@ -3,6 +3,7 @@ import { createWorker } from "tesseract.js";
 import type { AdapterEvent, AdapterRunContext, SourceAdapter, RawAnnouncement, RawEdition } from "./types";
 import { extractDates, extractDeadline, extractReferenceNumber, guessOrganization, firstSentenceAsTitle } from "../pipeline/extract";
 import { looksLikeAnnouncement } from "../intelligence/discovery-keywords";
+import { detectPrioritySectionHeader } from "../intelligence/taxonomy";
 
 /**
  * Jornal Notícias (flipbook-snoticias.app.co.mz) — authenticated digital
@@ -123,32 +124,93 @@ async function extractPageText(page: Page, pageNumber: number, ocrWorker: Awaite
   }
 }
 
-function segmentIntoAnnouncements(pageText: string, sourceDescription: string, sourceUrl: string): RawAnnouncement[] {
-  const blocks = pageText
+function blockToAnnouncement(
+  block: string,
+  sourceDescription: string,
+  sourceUrl: string
+): RawAnnouncement {
+  const organization = guessOrganization(block);
+  const reference = extractReferenceNumber(block);
+  const deadline = extractDeadline(block);
+
+  return {
+    externalRef: reference,
+    organizationRaw: organization ?? "Not extracted from page text",
+    title: firstSentenceAsTitle(block),
+    description: block,
+    sourceUrl,
+    deadline,
+    submissionDeadline: deadline,
+    sourceDescription,
+    inferredFields: organization ? undefined : ["organizationRaw"],
+  };
+}
+
+function splitIntoBlocks(text: string): string[] {
+  return text
     .split(/\n{2,}|(?=•\s)|(?=CONCURSO)|(?=ANÚNCIO)/i)
     .map((b) => b.trim())
     .filter((b) => b.length > 40);
+}
 
+/**
+ * Segments a page's text into candidate announcements using two combined
+ * strategies (spec: "combine section detection with semantic/keyword
+ * detection with document/link analysis"):
+ *
+ * 1. Section detection (primary, high-trust): find "Pedido de Manifestação
+ *    de Interesse" / "Anúncio de Concurso" section headers — tolerant of
+ *    OCR noise via detectPrioritySectionHeader — and take everything
+ *    between one header and the next as belonging to that section. Blocks
+ *    inside a recognized section don't need to separately pass the
+ *    keyword filter; being under that heading is itself the evidence.
+ * 2. Keyword fallback (secondary, catches anything the section scan
+ *    missed — different page layout, a relevant announcement outside
+ *    those two named sections, a heading OCR mangled beyond recognition):
+ *    the existing broad discovery-keyword scan across the whole page.
+ *
+ * Deliberately does not try to dedupe between the two passes here — the
+ * pipeline's own deduplication engine (lib/pipeline/dedupe.ts) already
+ * handles near-identical announcements robustly, so a block caught by both
+ * passes is harmless, not double-counted in the UI.
+ */
+function segmentIntoAnnouncements(pageText: string, sourceDescription: string, sourceUrl: string): RawAnnouncement[] {
   const announcements: RawAnnouncement[] = [];
-  for (const block of blocks) {
-    if (!looksLikeAnnouncement(block)) continue;
+  const lines = pageText.split("\n");
 
-    const organization = guessOrganization(block);
-    const reference = extractReferenceNumber(block);
-    const deadline = extractDeadline(block);
+  // Pass 1: section-based extraction.
+  let currentSection: string | null = null;
+  let currentSectionLines: string[] = [];
 
-    announcements.push({
-      externalRef: reference,
-      organizationRaw: organization ?? "Not extracted from page text",
-      title: firstSentenceAsTitle(block),
-      description: block,
-      sourceUrl,
-      deadline,
-      submissionDeadline: deadline,
-      sourceDescription,
-      inferredFields: organization ? undefined : ["organizationRaw"],
-    });
+  const flushSection = () => {
+    if (!currentSection || currentSectionLines.length === 0) return;
+    const sectionText = currentSectionLines.join("\n");
+    for (const block of splitIntoBlocks(sectionText)) {
+      announcements.push(
+        blockToAnnouncement(block, `${sourceDescription} — Secção: ${currentSection}`, sourceUrl)
+      );
+    }
+    currentSectionLines = [];
+  };
+
+  for (const line of lines) {
+    const headerMatch = detectPrioritySectionHeader(line);
+    if (headerMatch) {
+      flushSection();
+      currentSection = headerMatch.header;
+      continue;
+    }
+    if (currentSection) currentSectionLines.push(line);
   }
+  flushSection();
+
+  // Pass 2: broad keyword fallback across the whole page (catches
+  // relevant announcements outside the two named priority sections).
+  for (const block of splitIntoBlocks(pageText)) {
+    if (!looksLikeAnnouncement(block)) continue;
+    announcements.push(blockToAnnouncement(block, sourceDescription, sourceUrl));
+  }
+
   return announcements;
 }
 

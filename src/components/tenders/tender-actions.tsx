@@ -2,7 +2,6 @@
 
 import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
-import { Button } from "@/components/ui/button";
 
 const STATUS_OPTIONS = [
   { value: "NEW", label: "Novo" },
@@ -38,23 +37,16 @@ export function TenderActions({ tenderId, status, watchlisted }: { tenderId: str
           </option>
         ))}
       </select>
-      <Button
-        variant={localWatchlisted ? "secondary" : "primary"}
-        size="sm"
+      <button
         disabled={isPending}
         onClick={() => {
           setLocalWatchlisted(!localWatchlisted);
           patch({ watchlisted: !localWatchlisted });
         }}
+        className="text-sm text-muted-foreground hover:text-foreground"
       >
-        {localWatchlisted ? "👀 Na watchlist" : "👀 Adicionar à watchlist"}
-      </Button>
-      <Button variant="secondary" size="sm" disabled={isPending} onClick={() => patch({ status: "PURSUING" })}>
-        Marcar como &quot;A concorrer&quot;
-      </Button>
-      <Button variant="ghost" size="sm" disabled={isPending} onClick={() => patch({ status: "REJECTED" })}>
-        Rejeitar
-      </Button>
+        {localWatchlisted ? "★ Watchlist" : "☆ Watchlist"}
+      </button>
     </div>
   );
 }

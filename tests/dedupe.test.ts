@@ -3,6 +3,7 @@ import { findDuplicateCandidate, computeDedupeKey, type ExistingTenderLite } fro
 
 const baseExisting: ExistingTenderLite = {
   id: "existing-1",
+  sourceId: "source-jornal-noticias",
   externalRef: "MICOA/DNAAS/012/2026",
   organizationRaw: "Ministério da Terra e Ambiente",
   title: "Concurso para Consultoria em Avaliação de Impacto Ambiental — Corredor de Nacala",

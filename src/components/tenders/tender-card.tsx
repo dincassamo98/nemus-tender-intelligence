@@ -1,43 +1,54 @@
 import Link from "next/link";
-import { ClassificationBadge, DeadlineBadge, DemoBadge, StatusBadge } from "@/components/ui/indicators";
+import { cn } from "@/lib/utils";
+import { computeDeadlineInfo } from "@/lib/deadline";
+import { WatchlistToggle } from "./watchlist-toggle";
 
 export interface TenderCardData {
   id: string;
   title: string;
   organizationRaw: string;
   relevanceScore: number;
-  classification: "CRITICAL" | "HIGH" | "MEDIUM" | "LOW" | "NOT_RELEVANT";
   deadline: Date | string | null;
-  status: string;
   classificationReasons: string[];
-  source: { name: string; isDemo: boolean };
   geography?: string | null;
+  watchlisted?: boolean;
 }
 
+function formatDeadline(deadline: Date | string | null): string {
+  if (!deadline) return "Prazo não indicado";
+  return `Prazo: ${new Date(deadline).toLocaleDateString("pt-PT", { day: "2-digit", month: "short" })}`;
+}
+
+/**
+ * One card, one job: let Iris decide in two seconds whether to open it.
+ * Plain text hierarchy (title → org/deadline/relevance → why → action) —
+ * no stacked badges. Colour is reserved for genuine urgency only.
+ */
 export function TenderCard({ tender }: { tender: TenderCardData }) {
+  const deadlineInfo = computeDeadlineInfo(tender.deadline ? new Date(tender.deadline) : null);
+  const isUrgent = deadlineInfo.urgency === "URGENT" || deadlineInfo.urgency === "CRITICAL";
+
   return (
-    <Link
-      href={`/tenders/${tender.id}`}
-      className="block rounded-lg border border-border bg-card p-4 transition-shadow hover:shadow-md"
-    >
-      <div className="mb-2 flex flex-wrap items-center gap-2">
-        <ClassificationBadge classification={tender.classification} score={tender.relevanceScore} />
-        <DeadlineBadge deadline={tender.deadline} />
-        <StatusBadge status={tender.status} />
-        {tender.source.isDemo ? <DemoBadge /> : null}
-      </div>
-      <h3 className="text-sm font-semibold text-foreground line-clamp-2">{tender.title}</h3>
-      <p className="mt-1 text-sm text-muted-foreground">
-        {tender.organizationRaw}
-        {tender.geography ? ` · ${tender.geography}` : ""}
-      </p>
-      {tender.classificationReasons[0] ? (
-        <p className="mt-2 text-xs text-muted-foreground">
-          <span className="font-medium text-foreground">Why it matches: </span>
-          {tender.classificationReasons[0]}
+    <div className="rounded-lg border border-border bg-card p-4">
+      <Link href={`/tenders/${tender.id}`} className="block">
+        <h3 className="text-sm font-semibold text-foreground">{tender.title}</h3>
+        <p className="mt-0.5 text-sm text-muted-foreground">
+          {tender.organizationRaw}
+          {tender.geography ? ` · ${tender.geography}` : ""}
         </p>
-      ) : null}
-      <p className="mt-2 text-xs text-muted-foreground">Source: {tender.source.name}</p>
-    </Link>
+        <p className={cn("mt-1.5 text-sm", isUrgent ? "font-medium text-danger" : "text-foreground")}>
+          {formatDeadline(tender.deadline)} · {tender.relevanceScore}% relevante
+        </p>
+        {tender.classificationReasons[0] ? (
+          <p className="mt-1.5 text-sm italic text-muted-foreground">{tender.classificationReasons[0]}</p>
+        ) : null}
+      </Link>
+      <div className="mt-3 flex items-center gap-3">
+        <Link href={`/tenders/${tender.id}`} className="text-sm font-medium text-primary hover:underline">
+          Ver concurso →
+        </Link>
+        <WatchlistToggle tenderId={tender.id} initialWatchlisted={tender.watchlisted} />
+      </div>
+    </div>
   );
 }

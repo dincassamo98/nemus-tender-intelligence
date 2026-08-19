@@ -87,9 +87,10 @@ model Source {
   createdAt           DateTime   @default(now())
   updatedAt           DateTime   @updatedAt
 
-  runs     SourceRun[]
-  editions Edition[]
-  tenders  Tender[]
+  runs      SourceRun[]
+  editions  Edition[]
+  tenders   Tender[]
+  sightings TenderSourceSighting[]
 }
 
 model SourceRun {
@@ -277,6 +278,7 @@ model Tender {
   emailDrafts EmailDraft[]
   provenance  TenderFieldProvenance[]
   feedback    HumanFeedback[]
+  sightings   TenderSourceSighting[]
 
   @@index([status])
   @@index([classification])
@@ -307,6 +309,26 @@ model TenderFieldProvenance {
   capturedAt        DateTime             @default(now())
 
   @@index([tenderId, fieldName])
+}
+
+// Cross-source intelligence: the same real-world opportunity is often
+// published in more than one place (a ministry's tender in Jornal
+// Notícias AND UFSA AND Diário Económico). Rather than showing 3 separate
+// tenders, the dedupe pipeline links every subsequent sighting from a
+// different source to the original Tender via this join table, so the UI
+// can say "1 opportunity — discovered across 3 sources" and show each
+// source as independent corroborating evidence (spec section 12).
+model TenderSourceSighting {
+  id              String   @id @default(cuid())
+  tenderId        String
+  tender          Tender   @relation(fields: [tenderId], references: [id], onDelete: Cascade)
+  sourceId        String
+  source          Source   @relation(fields: [sourceId], references: [id])
+  sourceUrl       String
+  announcementUrl String?
+  firstSeenAt     DateTime @default(now())
+
+  @@unique([tenderId, sourceId])
 }
 
 model TenderDocument {

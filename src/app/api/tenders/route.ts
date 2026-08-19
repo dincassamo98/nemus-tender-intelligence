@@ -47,10 +47,6 @@ export async function GET(req: NextRequest) {
     ];
   }
 
-  const includeDemo = sp.get("includeDemo") === "true";
-  if (!includeDemo) where.source = { ...(where.source as object), isDemo: false };
-  else if (sp.get("demoOnly") === "true") where.source = { isDemo: true };
-
   const page = Math.max(1, Number(sp.get("page") ?? "1"));
   const sortParam = sp.get("sort") ?? "relevance";
   const orderBy: Prisma.TenderOrderByWithRelationInput =
